@@ -21,6 +21,25 @@ const STORAGE_KEY  = "filewatch.mappings";
 const FILTER_KEY   = "filewatch.ignorePatterns";
 const BATCH_SIZE   = 10;
 
+const LABEL_COLORS = [
+  { name: "Violet",     hex: "#3E0AAE" },
+  { name: "Iris",       hex: "#004B67" },
+  { name: "Caribbean",  hex: "#2A5507" },
+  { name: "Lavender",   hex: "#751187" },
+  { name: "Cerulean",   hex: "#05555B" },
+  { name: "Forest",     hex: "#3D4A00" },
+  { name: "Rose",       hex: "#8C0235" },
+  { name: "Mango",      hex: "#893A04" },
+  { name: "Purple",     hex: "#6100B7" },
+  { name: "Blue",       hex: "#122D9A" },
+  { name: "Teal",       hex: "#014E45" },
+  { name: "Magenta",    hex: "#840D58" },
+  { name: "Tan",        hex: "#6F5A45" },
+  { name: "Green",      hex: "#0D5D27" },
+  { name: "Brown",      hex: "#5D3B06" },
+  { name: "Yellow",     hex: "#6F6619" },
+];
+
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
@@ -97,6 +116,7 @@ function loadMappings() {
     mappings = raw ? JSON.parse(raw) : [];
     mappings.forEach((m) => {
       if (m.enabled === undefined) m.enabled = true;
+      if (m.label === undefined) m.label = 0;
     });
   } catch (e) {
     mappings = [];
@@ -239,6 +259,71 @@ function parseCSV(text) {
 }
 
 // ---------------------------------------------------------------------------
+// Color label popover
+// ---------------------------------------------------------------------------
+
+let activeSwatchIndex = -1;
+
+const colorPopoverEl = document.createElement("div");
+colorPopoverEl.className = "color-popover hidden";
+for (let ci = 0; ci < LABEL_COLORS.length; ci++) {
+  const opt = document.createElement("div");
+  opt.className = "color-option";
+  opt.style.backgroundColor = LABEL_COLORS[ci].hex;
+  opt.dataset.labelIndex = ci;
+  opt.title = LABEL_COLORS[ci].name;
+  colorPopoverEl.appendChild(opt);
+}
+document.body.appendChild(colorPopoverEl);
+
+colorPopoverEl.addEventListener("click", (e) => {
+  const opt = e.target.closest(".color-option");
+  if (!opt) return;
+  const idx = parseInt(opt.dataset.labelIndex, 10);
+  mappings[activeSwatchIndex].label = idx;
+  saveMappings();
+  updateSwatchForRow(activeSwatchIndex, idx);
+  closePopover();
+});
+
+document.addEventListener("click", (e) => {
+  if (activeSwatchIndex === -1) return;
+  if (!colorPopoverEl.contains(e.target) && !e.target.closest(".color-swatch")) {
+    closePopover();
+  }
+}, true);
+
+function closePopover() {
+  colorPopoverEl.classList.add("hidden");
+  activeSwatchIndex = -1;
+}
+
+function openPopover(mappingIndex, swatchEl) {
+  if (activeSwatchIndex === mappingIndex) { closePopover(); return; }
+  closePopover();
+  activeSwatchIndex = mappingIndex;
+  colorPopoverEl.querySelectorAll(".color-option").forEach(el => {
+    el.classList.toggle("active", parseInt(el.dataset.labelIndex, 10) === mappings[mappingIndex].label);
+  });
+  const rect = swatchEl.getBoundingClientRect();
+  const pw = colorPopoverEl.offsetWidth || 152;
+  const left = Math.min(rect.left, window.innerWidth - pw - 8);
+  colorPopoverEl.style.top = (rect.bottom + 4) + "px";
+  colorPopoverEl.style.left = Math.max(4, left) + "px";
+  colorPopoverEl.classList.remove("hidden");
+}
+
+function updateSwatchForRow(rowIndex, labelIndex) {
+  const tr = tableBody.querySelector(`tr[data-row-index="${rowIndex}"]`);
+  if (!tr) return;
+  const swatch = tr.querySelector(".color-swatch");
+  if (!swatch) return;
+  const color = LABEL_COLORS[labelIndex];
+  swatch.style.backgroundColor = color.hex;
+  swatch.title = color.name;
+}
+
+// ---------------------------------------------------------------------------
 // Table rendering
 // ---------------------------------------------------------------------------
 
@@ -246,6 +331,7 @@ function renderTable() {
   tableBody.innerHTML = "";
   mappings.forEach((mapping, i) => {
     const tr = document.createElement("tr");
+    tr.dataset.rowIndex = i;
 
     // Checkbox
     const tdChk = document.createElement("td");
@@ -305,6 +391,17 @@ function renderTable() {
     tdActive.appendChild(chkActive);
     tr.appendChild(tdActive);
 
+    // Label color swatch
+    const tdColor = document.createElement("td");
+    tdColor.className = "td-color";
+    const swatch = document.createElement("span");
+    swatch.className = "color-swatch";
+    swatch.style.backgroundColor = LABEL_COLORS[mapping.label ?? 0].hex || "transparent";
+    swatch.title = LABEL_COLORS[mapping.label ?? 0].name;
+    swatch.addEventListener("click", (e) => { e.stopPropagation(); openPopover(i, swatch); });
+    tdColor.appendChild(swatch);
+    tr.appendChild(tdColor);
+
     // Browse button
     const tdBrowse = document.createElement("td");
     const btnBrowse = document.createElement("button");
@@ -340,7 +437,7 @@ function renderTable() {
 // ---------------------------------------------------------------------------
 
 function addRow() {
-  mappings.push({ binPath: "", drivePath: "" });
+  mappings.push({ binPath: "", drivePath: "", label: 0 });
   saveMappings();
   renderTable();
   const rows = tableBody.querySelectorAll("tr");
@@ -394,6 +491,7 @@ async function importCSV() {
     );
     if (!content) return;
     const imported = parseCSV(content);
+    imported.forEach(m => { if (m.label === undefined) m.label = 0; });
     mappings = imported;
     saveMappings();
     renderTable();
@@ -418,7 +516,7 @@ async function syncMapping(mapping) {
   }
 
   const lastSyncEpoch = 0;
-  const queue = [{ binPath: mapping.binPath, fsPath: mapping.drivePath }];
+  const queue = [{ binPath: mapping.binPath, fsPath: mapping.drivePath, label: mapping.label ?? 0 }];
   let totalImported = 0, totalSkipped = 0, totalFailed = 0, unchangedCount = 0;
 
   while (queue.length > 0) {

@@ -125,11 +125,6 @@ thead th:first-child {
   text-align: center;
 }
 
-thead th:nth-last-child(2) {
-  width: 52px;
-  text-align: center;
-}
-
 thead th:last-child {
   width: 60px;
 }
@@ -151,6 +146,12 @@ tbody tr.row-disabled {
 }
 
 .td-active {
+  width: 52px;
+  text-align: center;
+}
+
+.td-color {
+  width: 36px;
   text-align: center;
 }
 
@@ -161,12 +162,6 @@ tbody td {
 tbody td:first-child {
   text-align: center;
   width: 28px;
-}
-
-tbody td:nth-last-child(2) {
-  width: 52px;
-  text-align: center;
-  padding: 2px 4px;
 }
 
 tbody td:last-child {
@@ -201,7 +196,7 @@ tbody td:last-child {
   border-radius: 4px;
   padding: 6px;
   display: grid;
-  grid-template-columns: repeat(9, 20px);
+  grid-template-columns: repeat(6, 20px);
   gap: 4px;
   z-index: 200;
   box-shadow: 0 4px 12px rgba(0,0,0,0.5);

@@ -22,6 +22,7 @@ var MEDIA_EXTENSIONS = (function () {
 // ---------------------------------------------------------------------------
 
 function isMediaFile(name) {
+  if (name.charAt(0) === '.' && name.charAt(1) === '_') return false;
   var dot = name.lastIndexOf(".");
   if (dot === -1) return false;
   return !!MEDIA_EXTENSIONS[name.slice(dot + 1).toLowerCase()];
@@ -111,6 +112,7 @@ function browseFolder() {
  * @returns {ProjectItem}
  */
 function findOrCreateBin(parentItem, name) {
+  var created = false;
   var children = parentItem.children;
   var matches = [];
   for (var i = 0; i < children.numItems; i++) {
@@ -122,11 +124,12 @@ function findOrCreateBin(parentItem, name) {
   }
 
   if (matches.length === 0) {
-    return parentItem.createBin(name);
+    created = true;
+    return [parentItem.createBin(name), created];
   }
 
   if (matches.length === 1) {
-    return matches[0];
+    return [matches[0], created];
   }
 
   // Merge duplicates into the first bin
@@ -145,7 +148,7 @@ function findOrCreateBin(parentItem, name) {
     dup.delete(false, false);
   }
 
-  return primary;
+  return [primary, created];
 }
 
 /**
@@ -157,12 +160,15 @@ function findOrCreateBin(parentItem, name) {
 function navigateOrCreateBinPath(binPathStr) {
   var parts = binPathStr.split("/");
   var current = app.project.rootItem;
+  var created = false;
   for (var i = 0; i < parts.length; i++) {
     var part = trimStr(parts[i]);
     if (!part) continue;
-    current = findOrCreateBin(current, part);
+    var res = findOrCreateBin(current, part);
+    current = res[0];
+    created = res[1];
   }
-  return current;
+  return [current, created];
 }
 
 /**
@@ -205,6 +211,7 @@ function syncFolderBatch(jobs, lastSyncEpoch, ignorePatterns) {
     for (var b = 0; b < jobs.length; b++) {
       var binPath = jobs[b].binPath;
       var fsPath  = jobs[b].fsPath;
+      var label = (jobs[b].label !== undefined) ? +jobs[b].label : 0;
       var resolvedPath = resolveDrivePath(trimStr(fsPath));
       var folder = new Folder(resolvedPath);
       if (!folder.exists) {
@@ -217,8 +224,9 @@ function syncFolderBatch(jobs, lastSyncEpoch, ignorePatterns) {
       for (var j = 0; j < allEntries.length; j++) {
         if (allEntries[j] instanceof Folder) {
           var folderName = allEntries[j].displayName;
+          if (folderName.charAt(0) === '.' && folderName.charAt(1) === '_') continue;
           if (!matchesIgnorePattern(folderName, ignorePatterns)) {
-            subfolders.push({ binPath: binPath + "/" + folderName, fsPath: allEntries[j].fsName });
+            subfolders.push({ binPath: binPath + "/" + folderName, fsPath: allEntries[j].fsName, label: label });
           }
         }
       }
@@ -230,7 +238,11 @@ function syncFolderBatch(jobs, lastSyncEpoch, ignorePatterns) {
         continue;
       }
 
-      var bin = navigateOrCreateBinPath(binPath);
+      var res = navigateOrCreateBinPath(binPath);
+      var bin = res[0];
+      var created = res[1];
+      if (created) { try { bin.setColorLabel(label); } catch (ex) {} }
+      
       var alreadyImported = getImportedFilePaths(bin);
       var toImport = [];
       var skipped = 0;
@@ -250,14 +262,41 @@ function syncFolderBatch(jobs, lastSyncEpoch, ignorePatterns) {
       if (toImport.length > 0) {
         try {
           app.project.importFiles(toImport, true, bin, false);
-          imported = toImport.length;
-          importedFiles = toImport.slice();
+          var afterImport = getImportedFilePaths(bin);
+          for (var ti = 0; ti < toImport.length; ti++) {
+            var normalizedImport = toImport[ti].replace(/\\/g, '/');
+            if (afterImport[normalizedImport]) {
+              imported++;
+              importedFiles.push(toImport[ti]);
+            } else {
+              failed++;
+              warnings.push("Silent import failure: " + toImport[ti]);
+            }
+          }
+          afterImport = null;
         } catch (e) {
           failed = toImport.length;
           warnings.push("importFiles failed: " + (e.message || String(e)));
         }
       }
       toImport = null;
+
+      if (imported > 0) {
+        var importedSet = {};
+        for (var ii = 0; ii < importedFiles.length; ii++) {
+          importedSet[importedFiles[ii].replace(/\\/g, '/')] = 1;
+        }
+        var binChildren = bin.children;
+        for (var ci = 0; ci < binChildren.numItems; ci++) {
+          var item = binChildren[ci];
+          if (item.type !== 2 && item.type !== 3) {
+            var itemPath = item.getMediaPath();
+            if (itemPath && importedSet[itemPath.replace(/\\/g, '/')]) {
+              try { item.setColorLabel(label); } catch (ex) {}
+            }
+          }
+        }
+      }
       bin = null;
 
       results.push({ binPath: binPath, imported: imported, skipped: skipped, failed: failed, warnings: warnings, subfolders: subfolders, changed: true, importedFiles: importedFiles });
