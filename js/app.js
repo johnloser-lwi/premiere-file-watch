@@ -18,41 +18,16 @@ function evalScript(script) {
 // ---------------------------------------------------------------------------
 
 const STORAGE_KEY = "filewatch.mappings";
-
-/**
- * Premiere Pro label color indices matched to the actual colors shown in the
- * Premiere Pro UI label picker. Index 0 = no label (clear).
- */
-const LABEL_COLORS = [
-  { index: 0,  name: "Violet",     hex: "#6b3fa0" },
-  { index: 1,  name: "Iris",       hex: "#3878b0" },
-  { index: 2,  name: "Caribbean",  hex: "#5c8020" },
-  { index: 3,  name: "Lavender",   hex: "#c838a0" },
-  { index: 4,  name: "Cerulean",   hex: "#38a090" },
-  { index: 5,  name: "Forest",     hex: "#888020" },
-  { index: 6,  name: "Rose",       hex: "#b83030" },
-  { index: 7,  name: "Mango",      hex: "#c86020" },
-  { index: 8,  name: "Purple",     hex: "#8030c0" },
-  { index: 9,  name: "Blue",       hex: "#3040b8" },
-  { index: 10, name: "Teal",       hex: "#288878" },
-  { index: 11, name: "Magenta",    hex: "#c02880" },
-  { index: 12, name: "Tan",        hex: "#988048" },
-  { index: 13, name: "Green",      hex: "#389830" },
-  { index: 14, name: "Brown",      hex: "#885020" },
-  { index: 15, name: "Yellow",     hex: "#a89020" },
-];
+const BATCH_SIZE  = 10;
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
-/** @type {Array<{ binPath: string, drivePath: string, labelColor: number }>} */
+/** @type {Array<{ binPath: string, drivePath: string, enabled: boolean, lastSyncTime: number }>} */
 let mappings = [];
 let watchTimer = null;
 let isSyncing = false;
-
-// Active popover reference — only one open at a time
-let activePopover = null;
 
 // ---------------------------------------------------------------------------
 // DOM refs
@@ -85,6 +60,9 @@ function log(msg, type = "info") {
     .join(":");
   entry.textContent = `[${ts}] ${msg}`;
   logEl.insertBefore(entry, logEl.firstChild);
+  while (logEl.childElementCount > 500) {
+    logEl.removeChild(logEl.lastChild);
+  }
 }
 
 function setStatus(msg, cls = "") {
@@ -108,9 +86,7 @@ function loadMappings() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     mappings = raw ? JSON.parse(raw) : [];
-    // Ensure labelColor field exists on older saved rows
     mappings.forEach((m) => {
-      if (m.labelColor === undefined) m.labelColor = -1;
       if (m.lastSyncTime === undefined) m.lastSyncTime = 0;
       if (m.enabled === undefined) m.enabled = true;
     });
@@ -127,8 +103,8 @@ function loadMappings() {
 function mappingsToCSV(rows) {
   const escape = (s) => `"${String(s).replace(/"/g, '""')}"`;
   return [
-    "binPath,drivePath,labelColor",
-    ...rows.map((r) => `${escape(r.binPath)},${escape(r.drivePath)},${r.labelColor ?? 0}`)
+    "binPath,drivePath",
+    ...rows.map((r) => `${escape(r.binPath)},${escape(r.drivePath)}`)
   ].join("\r\n");
 }
 
@@ -164,92 +140,10 @@ function parseCSV(text) {
     if (!line) continue;
     const fields = parseCSVLine(line);
     if (fields.length >= 2) {
-      rows.push({
-        binPath: fields[0],
-        drivePath: fields[1],
-        labelColor: fields[2] ? parseInt(fields[2], 10) || 0 : 0
-      });
+      rows.push({ binPath: fields[0], drivePath: fields[1] });
     }
   }
   return rows;
-}
-
-// ---------------------------------------------------------------------------
-// Color popover
-// ---------------------------------------------------------------------------
-
-function closeActivePopover() {
-  if (activePopover) {
-    activePopover.classList.add("hidden");
-    activePopover = null;
-  }
-}
-
-/**
- * Build and attach a color-picker popover to a swatch element.
- * @param {HTMLElement} swatch  the colored square button
- * @param {number} rowIndex
- */
-function attachColorPopover(swatch, rowIndex) {
-  const popover = document.createElement("div");
-  popover.className = "color-popover hidden";
-
-  LABEL_COLORS.forEach((color) => {
-    const opt = document.createElement("div");
-    opt.className = "color-option";
-    opt.style.background = color.hex;
-    opt.title = color.name;
-    if (color.index === mappings[rowIndex].labelColor) opt.classList.add("active");
-
-    opt.addEventListener("click", (e) => {
-      e.stopPropagation();
-      mappings[rowIndex].labelColor = color.index;
-      saveMappings();
-      // Update swatch appearance
-      swatch.style.background = color.hex;
-      swatch.title = color.name;
-      // Update active state in popover
-      popover.querySelectorAll(".color-option").forEach((o) => o.classList.remove("active"));
-      opt.classList.add("active");
-      closeActivePopover();
-      relabelMapping(mappings[rowIndex]);
-    });
-
-    popover.appendChild(opt);
-  });
-
-  document.body.appendChild(popover);
-
-  swatch.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (activePopover === popover) {
-      closeActivePopover();
-      return;
-    }
-    closeActivePopover();
-
-    // Make visible offscreen first to measure its size
-    popover.style.visibility = "hidden";
-    popover.classList.remove("hidden");
-
-    const rect = swatch.getBoundingClientRect();
-    const pw = popover.offsetWidth;
-    const ph = popover.offsetHeight;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-
-    // Prefer below, flip above if it would clip the bottom
-    const top = rect.bottom + 4 + ph > vh ? rect.top - ph - 4 : rect.bottom + 4;
-    // Prefer left-aligned to swatch, nudge left if it clips the right edge
-    const left = Math.min(rect.left, vw - pw - 4);
-
-    popover.style.top = `${top}px`;
-    popover.style.left = `${Math.max(4, left)}px`;
-    popover.style.visibility = "";
-    activePopover = popover;
-  });
-
-  return popover;
 }
 
 // ---------------------------------------------------------------------------
@@ -257,10 +151,6 @@ function attachColorPopover(swatch, rowIndex) {
 // ---------------------------------------------------------------------------
 
 function renderTable() {
-  // Remove any orphaned popovers from previous render
-  document.querySelectorAll(".color-popover").forEach((p) => p.remove());
-  activePopover = null;
-
   tableBody.innerHTML = "";
   mappings.forEach((mapping, i) => {
     const tr = document.createElement("tr");
@@ -306,18 +196,6 @@ function renderTable() {
     });
     tdDrive.appendChild(inpDrive);
     tr.appendChild(tdDrive);
-
-    // Label color swatch
-    const tdColor = document.createElement("td");
-    tdColor.className = "td-color";
-    const colorDef = LABEL_COLORS.find((c) => c.index === (mapping.labelColor ?? 0)) || LABEL_COLORS[0];
-    const swatch = document.createElement("div");
-    swatch.className = "color-swatch";
-    swatch.style.background = colorDef.hex;
-    swatch.title = colorDef.name;
-    attachColorPopover(swatch, i);
-    tdColor.appendChild(swatch);
-    tr.appendChild(tdColor);
 
     // Active toggle
     const tdActive = document.createElement("td");
@@ -365,15 +243,12 @@ function renderTable() {
   chkAll.indeterminate = false;
 }
 
-// Close popover when clicking elsewhere
-document.addEventListener("click", closeActivePopover);
-
 // ---------------------------------------------------------------------------
 // Add / Remove rows
 // ---------------------------------------------------------------------------
 
 function addRow() {
-  mappings.push({ binPath: "", drivePath: "", labelColor: -1 });
+  mappings.push({ binPath: "", drivePath: "" });
   saveMappings();
   renderTable();
   const rows = tableBody.querySelectorAll("tr");
@@ -437,24 +312,6 @@ async function importCSV() {
 }
 
 // ---------------------------------------------------------------------------
-// Label
-// ---------------------------------------------------------------------------
-
-const BATCH_SIZE = 10;
-
-async function relabelMapping(mapping) {
-  if (!mapping.binPath.trim()) return;
-  const labelColor = mapping.labelColor ?? 0;
-  const colorName = LABEL_COLORS.find((c) => c.index === labelColor)?.name;
-  const script = `relabelBinRecursive(${JSON.stringify(mapping.binPath)}, ${labelColor})`;
-  const raw = await evalScript(script);
-  let result;
-  try { result = JSON.parse(raw); } catch (_) { result = { error: raw }; }
-  if (result.error) { log(`"${mapping.binPath}": relabel error — ${result.error}`, "error"); return; }
-  log(`"${mapping.binPath}": label set to ${colorName || "none"} (${result.labeled} items).`, "success");
-}
-
-// ---------------------------------------------------------------------------
 // Sync
 // ---------------------------------------------------------------------------
 
@@ -469,8 +326,6 @@ async function syncMapping(mapping) {
   }
 
   const lastSyncEpoch = chkForceSync.checked ? 0 : (mapping.lastSyncTime ?? 0);
-
-  // --- Phase 1: sync (import only, no label calls) ---
   const queue = [{ binPath: mapping.binPath, fsPath: mapping.drivePath }];
   let totalImported = 0, totalSkipped = 0, totalFailed = 0, unchangedCount = 0;
 
@@ -502,7 +357,6 @@ async function syncMapping(mapping) {
   const failedNote    = totalFailed    > 0 ? `, ${totalFailed} failed`       : "";
   const unchangedNote = unchangedCount > 0 ? `, ${unchangedCount} unchanged` : "";
   log(`"${mapping.binPath}": imported ${totalImported}, skipped ${totalSkipped}${failedNote}${unchangedNote}.`, totalFailed > 0 ? "warn" : "success");
-
 }
 
 async function syncAll() {
