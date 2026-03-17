@@ -244,7 +244,7 @@ function syncFolderToBin(rootFolderPath, rootBin, labelColorIndex, stats, lastSy
       if (toImport.length > 0) {
         app.project.importFiles(toImport, true, bin, false);
         stats.imported += toImport.length;
-        app.doUpdates = true; // yield UI thread after import
+
       }
       toImport = null;
 
@@ -278,80 +278,73 @@ function syncFolderToBin(rootFolderPath, rootBin, labelColorIndex, stats, lastSy
 // ---------------------------------------------------------------------------
 
 /**
- * Process ONE folder — no recursion. Import new media files into the matching
- * bin, apply label, return subfolders so JS can drive the queue with pauses
- * between calls to let Premiere's main thread breathe.
- * @param {string} binPath         slash-delimited bin path
- * @param {string} folderPath      native filesystem path for this folder
- * @param {number} labelColorIndex
- * @param {number} lastSyncEpoch   ms epoch; 0 = force full scan
- * @returns {string} JSON: { imported, skipped, failed, warnings, subfolders, changed } | { error }
+ * Process a batch of folders in one evalScript call to amortise CEP IPC overhead.
+ * Import only — no label application (handled separately by relabelBinBatch).
+ * @param {Array}  jobs         array of { binPath, fsPath }
+ * @param {number} lastSyncEpoch ms epoch; 0 = force full scan
+ * @returns {string} JSON array of per-folder results: { binPath, imported, skipped, failed, warnings, subfolders, changed } | { error }
  */
-function syncFolderStep(binPath, folderPath, labelColorIndex, lastSyncEpoch) {
-  labelColorIndex = parseInt(labelColorIndex, 10) || 0;
+function syncFolderBatch(jobs, lastSyncEpoch) {
   lastSyncEpoch = +lastSyncEpoch || 0;
   try {
     if (!app.project) return JSON.stringify({ error: "No active Premiere project." });
-    var resolvedPath = resolveDrivePath(trimStr(folderPath));
-    var folder = new Folder(resolvedPath);
-    if (!folder.exists) return JSON.stringify({ error: "Folder not found: " + resolvedPath });
-
-    var allEntries = folder.getFiles();
-
-    var subfolders = [];
-    for (var j = 0; j < allEntries.length; j++) {
-      if (allEntries[j] instanceof Folder) {
-        var sub = allEntries[j];
-        subfolders.push({ binPath: binPath + "/" + sub.displayName, fsPath: sub.fsName });
+    var results = [];
+    for (var b = 0; b < jobs.length; b++) {
+      var binPath = jobs[b].binPath;
+      var fsPath  = jobs[b].fsPath;
+      var resolvedPath = resolveDrivePath(trimStr(fsPath));
+      var folder = new Folder(resolvedPath);
+      if (!folder.exists) {
+        results.push({ binPath: binPath, error: "Folder not found: " + resolvedPath });
+        continue;
       }
-    }
 
-    var folderChanged = (lastSyncEpoch <= 0) || (folder.modified.getTime() > lastSyncEpoch);
-
-    if (!folderChanged) {
-      return JSON.stringify({ imported: 0, skipped: 0, failed: 0, warnings: [], subfolders: subfolders, changed: false });
-    }
-
-    var bin = navigateOrCreateBinPath(binPath);
-    var alreadyImported = getImportedFilenames(bin);
-    var toImport = [];
-    var skipped = 0;
-    for (var i = 0; i < allEntries.length; i++) {
-      var entry = allEntries[i];
-      if (entry instanceof File) {
-        var displayName = entry.displayName;
-        if (isMediaFile(displayName)) {
-          if (alreadyImported[displayName]) { skipped++; } else { toImport.push(entry.fsName); }
+      var allEntries = folder.getFiles();
+      var subfolders = [];
+      for (var j = 0; j < allEntries.length; j++) {
+        if (allEntries[j] instanceof Folder) {
+          subfolders.push({ binPath: binPath + "/" + allEntries[j].displayName, fsPath: allEntries[j].fsName });
         }
       }
-    }
-    allEntries = null;     // release file/folder references
-    alreadyImported = null;
 
-    var imported = 0, failed = 0, warnings = [];
-    if (toImport.length > 0) {
-      try {
-        app.project.importFiles(toImport, true, bin, false);
-        imported = toImport.length;
-      } catch (e) {
-        failed = toImport.length;
-        warnings.push("importFiles failed: " + (e.message || String(e)));
+      var folderChanged = (lastSyncEpoch <= 0) || (folder.modified.getTime() > lastSyncEpoch);
+      if (!folderChanged) {
+        allEntries = null;
+        results.push({ binPath: binPath, imported: 0, skipped: 0, failed: 0, warnings: [], subfolders: subfolders, changed: false });
+        continue;
       }
-      app.doUpdates = true; // yield UI thread after import work
-    }
-    toImport = null;
 
-    if (labelColorIndex >= 0) {
-      try { bin.setColorLabel(labelColorIndex); } catch (e) {}
-      var bc = bin.children;
-      for (var c = 0; c < bc.numItems; c++) {
-        if (bc[c].type !== 3) { try { bc[c].setColorLabel(labelColorIndex); } catch (e) {} }
+      var bin = navigateOrCreateBinPath(binPath);
+      var alreadyImported = getImportedFilenames(bin);
+      var toImport = [];
+      var skipped = 0;
+      for (var i = 0; i < allEntries.length; i++) {
+        if (allEntries[i] instanceof File) {
+          var displayName = allEntries[i].displayName;
+          if (isMediaFile(displayName)) {
+            if (alreadyImported[displayName]) { skipped++; } else { toImport.push(allEntries[i].fsName); }
+          }
+        }
       }
-      bc = null;
-    }
-    bin = null;
+      allEntries = null;
+      alreadyImported = null;
 
-    return JSON.stringify({ imported: imported, skipped: skipped, failed: failed, warnings: warnings, subfolders: subfolders, changed: true });
+      var imported = 0, failed = 0, warnings = [];
+      if (toImport.length > 0) {
+        try {
+          app.project.importFiles(toImport, true, bin, false);
+          imported = toImport.length;
+        } catch (e) {
+          failed = toImport.length;
+          warnings.push("importFiles failed: " + (e.message || String(e)));
+        }
+      }
+      toImport = null;
+      bin = null;
+
+      results.push({ binPath: binPath, imported: imported, skipped: skipped, failed: failed, warnings: warnings, subfolders: subfolders, changed: true });
+    }
+    return JSON.stringify(results);
   } catch (e) {
     return JSON.stringify({ error: e.message || String(e) });
   }
@@ -383,6 +376,45 @@ function syncMapping(binPath, drivePath, labelColorIndex, lastSyncEpoch) {
       skipped: stats.skipped,
       warnings: stats.warnings
     });
+  } catch (e) {
+    return JSON.stringify({ error: e.message || String(e) });
+  }
+}
+
+/**
+ * Label an entire bin tree in one evalScript call.
+ * Navigates to the root bin ONCE, then traverses using ProjectItem references
+ * directly — no repeated path lookups for sub-bins.
+ * Iterative DFS with aggressive null-ing to keep COM reference count low.
+ * @param {string} binPath         slash-delimited bin path
+ * @param {number} labelColorIndex
+ * @returns {string} JSON: { labeled: number } | { error }
+ */
+function relabelBinRecursive(binPath, labelColorIndex) {
+  labelColorIndex = parseInt(labelColorIndex, 10) || 0;
+  try {
+    if (!app.project) return JSON.stringify({ error: "No active Premiere project." });
+    var stack = [navigateOrCreateBinPath(binPath)];
+    var labeled = 0;
+    while (stack.length > 0) {
+      var bin = stack.pop();
+      try { bin.setColorLabel(labelColorIndex); } catch (e) {}
+      var children = bin.children;
+      var numItems = children.numItems;
+      for (var i = 0; i < numItems; i++) {
+        var child = children[i];
+        if (child.type === 2) {
+          stack.push(child);
+        } else if (child.type !== 3) {
+          try { child.setColorLabel(labelColorIndex); } catch (e) {}
+          labeled++;
+        }
+        child = null;
+      }
+      children = null;
+      bin = null;
+    }
+    return JSON.stringify({ labeled: labeled });
   } catch (e) {
     return JSON.stringify({ error: e.message || String(e) });
   }

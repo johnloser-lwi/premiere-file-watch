@@ -204,7 +204,6 @@ function attachColorPopover(swatch, rowIndex) {
     opt.addEventListener("click", (e) => {
       e.stopPropagation();
       mappings[rowIndex].labelColor = color.index;
-      mappings[rowIndex].lastSyncTime = 0;   // force full re-sync so all items get relabeled
       saveMappings();
       // Update swatch appearance
       swatch.style.background = color.hex;
@@ -213,6 +212,7 @@ function attachColorPopover(swatch, rowIndex) {
       popover.querySelectorAll(".color-option").forEach((o) => o.classList.remove("active"));
       opt.classList.add("active");
       closeActivePopover();
+      relabelMapping(mappings[rowIndex]);
     });
 
     popover.appendChild(opt);
@@ -437,6 +437,24 @@ async function importCSV() {
 }
 
 // ---------------------------------------------------------------------------
+// Label
+// ---------------------------------------------------------------------------
+
+const BATCH_SIZE = 10;
+
+async function relabelMapping(mapping) {
+  if (!mapping.binPath.trim()) return;
+  const labelColor = mapping.labelColor ?? 0;
+  const colorName = LABEL_COLORS.find((c) => c.index === labelColor)?.name;
+  const script = `relabelBinRecursive(${JSON.stringify(mapping.binPath)}, ${labelColor})`;
+  const raw = await evalScript(script);
+  let result;
+  try { result = JSON.parse(raw); } catch (_) { result = { error: raw }; }
+  if (result.error) { log(`"${mapping.binPath}": relabel error — ${result.error}`, "error"); return; }
+  log(`"${mapping.binPath}": label set to ${colorName || "none"} (${result.labeled} items).`, "success");
+}
+
+// ---------------------------------------------------------------------------
 // Sync
 // ---------------------------------------------------------------------------
 
@@ -450,33 +468,32 @@ async function syncMapping(mapping) {
     return;
   }
 
-  const labelColor = mapping.labelColor ?? 0;
   const lastSyncEpoch = chkForceSync.checked ? 0 : (mapping.lastSyncTime ?? 0);
-  const colorName = LABEL_COLORS.find((c) => c.index === labelColor)?.name;
-  const labelNote = labelColor > 0 ? ` [label: ${colorName}]` : "";
 
+  // --- Phase 1: sync (import only, no label calls) ---
   const queue = [{ binPath: mapping.binPath, fsPath: mapping.drivePath }];
   let totalImported = 0, totalSkipped = 0, totalFailed = 0, unchangedCount = 0;
 
   while (queue.length > 0) {
-    const { binPath, fsPath } = queue.shift();
-
-    const script = `syncFolderStep(${JSON.stringify(binPath)}, ${JSON.stringify(fsPath)}, ${labelColor}, ${lastSyncEpoch})`;
+    const batch = queue.splice(0, Math.min(BATCH_SIZE, queue.length));
+    const script = `syncFolderBatch(${JSON.stringify(batch)}, ${lastSyncEpoch})`;
     const raw = await evalScript(script);
-    let result;
-    try { result = JSON.parse(raw); } catch (_) { result = { error: raw }; }
+    let results;
+    try { results = JSON.parse(raw); } catch (_) { results = { error: raw }; }
+    if (results.error) { log(`Sync error: ${results.error}`, "error"); break; }
 
-    if (result.error) {
-      log(`  Error in "${binPath}": ${result.error}`, "warn");
-    } else {
-      totalImported += result.imported;
-      totalSkipped  += result.skipped;
-      totalFailed   += result.failed || 0;
-      if (!result.changed) { unchangedCount++; }
-      (result.warnings || []).forEach((w) => log(`  Warning: ${w}`, "warn"));
-      for (const sub of result.subfolders) queue.push(sub);
+    for (const result of results) {
+      if (result.error) {
+        log(`  Error in "${result.binPath}": ${result.error}`, "warn");
+      } else {
+        totalImported += result.imported;
+        totalSkipped  += result.skipped;
+        totalFailed   += result.failed || 0;
+        if (!result.changed) { unchangedCount++; }
+        (result.warnings || []).forEach((w) => log(`  Warning: ${w}`, "warn"));
+        for (const sub of result.subfolders) queue.push(sub);
+      }
     }
-
   }
 
   mapping.lastSyncTime = Date.now();
@@ -484,7 +501,8 @@ async function syncMapping(mapping) {
 
   const failedNote    = totalFailed    > 0 ? `, ${totalFailed} failed`       : "";
   const unchangedNote = unchangedCount > 0 ? `, ${unchangedCount} unchanged` : "";
-  log(`"${mapping.binPath}": imported ${totalImported}, skipped ${totalSkipped}${failedNote}${unchangedNote}${labelNote}.`, totalFailed > 0 ? "warn" : "success");
+  log(`"${mapping.binPath}": imported ${totalImported}, skipped ${totalSkipped}${failedNote}${unchangedNote}.`, totalFailed > 0 ? "warn" : "success");
+
 }
 
 async function syncAll() {
