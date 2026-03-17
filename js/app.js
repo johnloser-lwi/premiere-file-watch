@@ -452,23 +452,39 @@ async function syncMapping(mapping) {
 
   const labelColor = mapping.labelColor ?? 0;
   const lastSyncEpoch = chkForceSync.checked ? 0 : (mapping.lastSyncTime ?? 0);
-  const script = `syncMapping(${JSON.stringify(mapping.binPath)}, ${JSON.stringify(mapping.drivePath)}, ${labelColor}, ${lastSyncEpoch})`;
-  const raw = await evalScript(script);
+  const colorName = LABEL_COLORS.find((c) => c.index === labelColor)?.name;
+  const labelNote = labelColor > 0 ? ` [label: ${colorName}]` : "";
 
-  let result;
-  try { result = JSON.parse(raw); } catch (_) { result = { error: raw }; }
+  const queue = [{ binPath: mapping.binPath, fsPath: mapping.drivePath }];
+  let totalImported = 0, totalSkipped = 0, totalFailed = 0, unchangedCount = 0;
 
-  if (result.error) throw new Error(result.error);
+  while (queue.length > 0) {
+    const { binPath, fsPath } = queue.shift();
+
+    const script = `syncFolderStep(${JSON.stringify(binPath)}, ${JSON.stringify(fsPath)}, ${labelColor}, ${lastSyncEpoch})`;
+    const raw = await evalScript(script);
+    let result;
+    try { result = JSON.parse(raw); } catch (_) { result = { error: raw }; }
+
+    if (result.error) {
+      log(`  Error in "${binPath}": ${result.error}`, "warn");
+    } else {
+      totalImported += result.imported;
+      totalSkipped  += result.skipped;
+      totalFailed   += result.failed || 0;
+      if (!result.changed) { unchangedCount++; }
+      (result.warnings || []).forEach((w) => log(`  Warning: ${w}`, "warn"));
+      for (const sub of result.subfolders) queue.push(sub);
+    }
+
+  }
 
   mapping.lastSyncTime = Date.now();
   saveMappings();
 
-  const warnings = result.warnings || [];
-  warnings.forEach((w) => log(`  Warning: ${w}`, "warn"));
-
-  const colorName = LABEL_COLORS.find((c) => c.index === labelColor)?.name;
-  const labelNote = labelColor > 0 ? ` [label: ${colorName}]` : "";
-  log(`"${mapping.binPath}": imported ${result.imported}, skipped ${result.skipped}${labelNote}.`, "success");
+  const failedNote    = totalFailed    > 0 ? `, ${totalFailed} failed`       : "";
+  const unchangedNote = unchangedCount > 0 ? `, ${unchangedCount} unchanged` : "";
+  log(`"${mapping.binPath}": imported ${totalImported}, skipped ${totalSkipped}${failedNote}${unchangedNote}${labelNote}.`, totalFailed > 0 ? "warn" : "success");
 }
 
 async function syncAll() {
