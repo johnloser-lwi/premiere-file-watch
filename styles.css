@@ -146,6 +146,14 @@ tbody tr.selected {
   background: #1e2d3d;
 }
 
+tbody tr.row-disabled {
+  opacity: 0.4;
+}
+
+.td-active {
+  text-align: center;
+}
+
 tbody td {
   padding: 2px 4px;
 }

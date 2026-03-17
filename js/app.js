@@ -108,7 +108,11 @@ function loadMappings() {
     const raw = localStorage.getItem(STORAGE_KEY);
     mappings = raw ? JSON.parse(raw) : [];
     // Ensure labelColor field exists on older saved rows
-    mappings.forEach((m) => { if (m.labelColor === undefined) m.labelColor = -1; });
+    mappings.forEach((m) => {
+      if (m.labelColor === undefined) m.labelColor = -1;
+      if (m.lastSyncTime === undefined) m.lastSyncTime = 0;
+      if (m.enabled === undefined) m.enabled = true;
+    });
   } catch (e) {
     mappings = [];
     log(`Failed to load saved mappings: ${e.message}`, "warn");
@@ -199,6 +203,7 @@ function attachColorPopover(swatch, rowIndex) {
     opt.addEventListener("click", (e) => {
       e.stopPropagation();
       mappings[rowIndex].labelColor = color.index;
+      mappings[rowIndex].lastSyncTime = 0;   // force full re-sync so all items get relabeled
       saveMappings();
       // Update swatch appearance
       swatch.style.background = color.hex;
@@ -312,6 +317,22 @@ function renderTable() {
     attachColorPopover(swatch, i);
     tdColor.appendChild(swatch);
     tr.appendChild(tdColor);
+
+    // Active toggle
+    const tdActive = document.createElement("td");
+    tdActive.className = "td-active";
+    const chkActive = document.createElement("input");
+    chkActive.type = "checkbox";
+    chkActive.title = "Enable/disable this mapping";
+    chkActive.checked = mapping.enabled !== false;
+    chkActive.addEventListener("change", () => {
+      mappings[i].enabled = chkActive.checked;
+      tr.classList.toggle("row-disabled", !chkActive.checked);
+      saveMappings();
+    });
+    tr.classList.toggle("row-disabled", !chkActive.checked);
+    tdActive.appendChild(chkActive);
+    tr.appendChild(tdActive);
 
     // Browse button
     const tdBrowse = document.createElement("td");
@@ -429,13 +450,17 @@ async function syncMapping(mapping) {
   }
 
   const labelColor = mapping.labelColor ?? 0;
-  const script = `syncMapping(${JSON.stringify(mapping.binPath)}, ${JSON.stringify(mapping.drivePath)}, ${labelColor})`;
+  const lastSyncEpoch = mapping.lastSyncTime ?? 0;
+  const script = `syncMapping(${JSON.stringify(mapping.binPath)}, ${JSON.stringify(mapping.drivePath)}, ${labelColor}, ${lastSyncEpoch})`;
   const raw = await evalScript(script);
 
   let result;
   try { result = JSON.parse(raw); } catch (_) { result = { error: raw }; }
 
   if (result.error) throw new Error(result.error);
+
+  mapping.lastSyncTime = Date.now();
+  saveMappings();
 
   const warnings = result.warnings || [];
   warnings.forEach((w) => log(`  Warning: ${w}`, "warn"));
@@ -454,6 +479,7 @@ async function syncAll() {
 
   let errors = 0;
   for (const mapping of mappings) {
+    if (mapping.enabled === false) continue;
     try {
       await syncMapping(mapping);
     } catch (e) {

@@ -184,7 +184,7 @@ function getImportedFilenames(bin) {
  * @param {number} labelColorIndex  0 = no label; 1-12 = Premiere color index
  * @param {Object} stats            { imported, skipped, warnings }
  */
-function syncFolderToBin(folderPath, bin, labelColorIndex, stats) {
+function syncFolderToBin(folderPath, bin, labelColorIndex, stats, lastSyncEpoch) {
   var folder = new Folder(folderPath);
   if (!folder.exists) {
     stats.warnings.push("Folder not found: " + folderPath);
@@ -192,49 +192,56 @@ function syncFolderToBin(folderPath, bin, labelColorIndex, stats) {
   }
 
   var allEntries = folder.getFiles();
-  var toImport = [];
-  var alreadyImported = getImportedFilenames(bin);
 
-  for (var i = 0; i < allEntries.length; i++) {
-    var entry = allEntries[i];
-    if (entry instanceof File) {
-      // Use displayName: File.name is URL-encoded ("my%20file.jpeg"),
-      // but Premiere stores items with the decoded display name ("my file.jpeg").
-      var displayName = entry.displayName;
-      if (isMediaFile(displayName)) {
-        if (alreadyImported[displayName]) {
-          stats.skipped++;
-        } else {
-          toImport.push(entry.fsName);
+  // Skip import work if this folder hasn't been modified since the last sync.
+  // Subfolders are still recursed — their own mtime is checked independently.
+  var folderChanged = (lastSyncEpoch <= 0) || (folder.modified.getTime() > lastSyncEpoch);
+
+  if (folderChanged) {
+    var toImport = [];
+    var alreadyImported = getImportedFilenames(bin);
+
+    for (var i = 0; i < allEntries.length; i++) {
+      var entry = allEntries[i];
+      if (entry instanceof File) {
+        // Use displayName: File.name is URL-encoded ("my%20file.jpeg"),
+        // but Premiere stores items with the decoded display name ("my file.jpeg").
+        var displayName = entry.displayName;
+        if (isMediaFile(displayName)) {
+          if (alreadyImported[displayName]) {
+            stats.skipped++;
+          } else {
+            toImport.push(entry.fsName);
+          }
+        }
+      }
+    }
+
+    if (toImport.length > 0) {
+      app.project.importFiles(toImport, true, bin, false);
+      stats.imported += toImport.length;
+    }
+
+    // Apply label color to the bin itself and all direct media children (-1 = skip)
+    if (labelColorIndex >= 0) {
+      try { bin.setColorLabel(labelColorIndex); } catch (e) { /* ignore */ }
+      var binChildren = bin.children;
+      for (var c = 0; c < binChildren.numItems; c++) {
+        var child = binChildren[c];
+        if (child.type !== 3) { // apply to media items and sub-bins, skip ROOT
+          try { child.setColorLabel(labelColorIndex); } catch (e) { /* ignore */ }
         }
       }
     }
   }
 
-  if (toImport.length > 0) {
-    app.project.importFiles(toImport, true, bin, false);
-    stats.imported += toImport.length;
-  }
-
-  // Apply label color to the bin itself and all direct media children (-1 = skip)
-  if (labelColorIndex >= 0) {
-    try { bin.setColorLabel(labelColorIndex); } catch (e) { /* ignore */ }
-    var binChildren = bin.children;
-    for (var c = 0; c < binChildren.numItems; c++) {
-      var child = binChildren[c];
-      if (child.type !== 3) { // apply to media items and sub-bins, skip ROOT
-        try { child.setColorLabel(labelColorIndex); } catch (e) { /* ignore */ }
-      }
-    }
-  }
-
-  // Recurse into subfolders (label is applied to sub-bins via the call above too)
+  // Always recurse — each subfolder's mtime is checked independently
   for (var j = 0; j < allEntries.length; j++) {
     var sub = allEntries[j];
     if (sub instanceof Folder) {
       // Use displayName: decoded name matches Premiere's bin name
       var subBin = findOrCreateBin(bin, sub.displayName);
-      syncFolderToBin(sub.fsName, subBin, labelColorIndex, stats);
+      syncFolderToBin(sub.fsName, subBin, labelColorIndex, stats, lastSyncEpoch);
     }
   }
 }
@@ -250,8 +257,9 @@ function syncFolderToBin(folderPath, bin, labelColorIndex, stats) {
  * @param {number} labelColorIndex 0 = no label; 1-12 = Premiere color index
  * @returns {string} JSON: { imported, skipped, warnings } | { error }
  */
-function syncMapping(binPath, drivePath, labelColorIndex) {
+function syncMapping(binPath, drivePath, labelColorIndex, lastSyncEpoch) {
   labelColorIndex = parseInt(labelColorIndex, 10) || 0;
+  lastSyncEpoch = +lastSyncEpoch || 0;
   if (!trimStr(binPath) || !trimStr(drivePath)) {
     return JSON.stringify({ error: "Empty bin path or drive path." });
   }
@@ -262,7 +270,7 @@ function syncMapping(binPath, drivePath, labelColorIndex) {
     var resolvedPath = resolveDrivePath(trimStr(drivePath));
     var bin = navigateOrCreateBinPath(binPath);
     var stats = { imported: 0, skipped: 0, warnings: [] };
-    syncFolderToBin(resolvedPath, bin, labelColorIndex, stats);
+    syncFolderToBin(resolvedPath, bin, labelColorIndex, stats, lastSyncEpoch);
     return JSON.stringify({
       imported: stats.imported,
       skipped: stats.skipped,
