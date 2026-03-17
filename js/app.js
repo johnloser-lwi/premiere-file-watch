@@ -66,6 +66,7 @@ const btnRemove    = document.getElementById("btn-remove");
 const btnImportCSV = document.getElementById("btn-import-csv");
 const btnExportCSV = document.getElementById("btn-export-csv");
 const btnSync      = document.getElementById("btn-sync");
+const chkForceSync = document.getElementById("chk-force-sync");
 const toggleWatch  = document.getElementById("toggle-watch");
 const intervalSel  = document.getElementById("interval-sel");
 const logEl        = document.getElementById("log");
@@ -450,7 +451,7 @@ async function syncMapping(mapping) {
   }
 
   const labelColor = mapping.labelColor ?? 0;
-  const lastSyncEpoch = mapping.lastSyncTime ?? 0;
+  const lastSyncEpoch = chkForceSync.checked ? 0 : (mapping.lastSyncTime ?? 0);
   const script = `syncMapping(${JSON.stringify(mapping.binPath)}, ${JSON.stringify(mapping.drivePath)}, ${labelColor}, ${lastSyncEpoch})`;
   const raw = await evalScript(script);
 
