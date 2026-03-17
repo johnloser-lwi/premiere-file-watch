@@ -20,6 +20,17 @@
     <button type="button" id="btn-remove">− Remove</button>
     <button type="button" id="btn-import-csv">Import CSV</button>
     <button type="button" id="btn-export-csv">Export CSV</button>
+    <button type="button" id="btn-filters" class="btn-filters-toggle">Filters</button>
+  </div>
+
+  <!-- Filters panel (hidden by default) -->
+  <div id="filters-panel" class="hidden">
+    <div id="filters-hint">Regex patterns matched against file and folder names (case-insensitive). Matching items are skipped during sync.</div>
+    <div id="filters-add-row">
+      <input type="text" id="filter-input" placeholder='e.g.  \.DS_Store$  or  ^\.  or  _proxy' />
+      <button type="button" id="btn-add-filter">Add</button>
+    </div>
+    <div id="filter-list"></div>
   </div>
 
   <!-- Mappings table -->
@@ -42,10 +53,6 @@
   <!-- Watch controls -->
   <div id="watch-controls">
     <button type="button" id="btn-sync" class="primary">Sync Now</button>
-    <label title="Ignore last sync time and re-import all folders">
-      <input type="checkbox" id="chk-force-sync" />
-      Force
-    </label>
     <label>
       <input type="checkbox" id="toggle-watch" />
       Auto-watch

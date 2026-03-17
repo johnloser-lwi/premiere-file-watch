@@ -17,35 +17,44 @@ function evalScript(script) {
 // Constants
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = "filewatch.mappings";
-const BATCH_SIZE  = 10;
+const STORAGE_KEY  = "filewatch.mappings";
+const FILTER_KEY   = "filewatch.ignorePatterns";
+const BATCH_SIZE   = 10;
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
-/** @type {Array<{ binPath: string, drivePath: string, enabled: boolean, lastSyncTime: number }>} */
+/** @type {Array<{ binPath: string, drivePath: string, enabled: boolean }>} */
 let mappings = [];
+/** @type {string[]} */
+let ignorePatterns = [];
 let watchTimer = null;
 let isSyncing = false;
+let showingFilters = false;
 
 // ---------------------------------------------------------------------------
 // DOM refs
 // ---------------------------------------------------------------------------
 
-const statusEl     = document.getElementById("status");
-const tableBody    = document.getElementById("table-body");
-const chkAll       = document.getElementById("chk-all");
-const btnAdd       = document.getElementById("btn-add");
-const btnRemove    = document.getElementById("btn-remove");
-const btnImportCSV = document.getElementById("btn-import-csv");
-const btnExportCSV = document.getElementById("btn-export-csv");
-const btnSync      = document.getElementById("btn-sync");
-const chkForceSync = document.getElementById("chk-force-sync");
-const toggleWatch  = document.getElementById("toggle-watch");
-const intervalSel  = document.getElementById("interval-sel");
-const logEl        = document.getElementById("log");
-const btnClearLog  = document.getElementById("btn-clear-log");
+const statusEl       = document.getElementById("status");
+const tableBody      = document.getElementById("table-body");
+const tableContainer = document.getElementById("table-container");
+const filtersPanel   = document.getElementById("filters-panel");
+const filterList     = document.getElementById("filter-list");
+const filterInput    = document.getElementById("filter-input");
+const chkAll         = document.getElementById("chk-all");
+const btnAdd         = document.getElementById("btn-add");
+const btnRemove      = document.getElementById("btn-remove");
+const btnImportCSV   = document.getElementById("btn-import-csv");
+const btnExportCSV   = document.getElementById("btn-export-csv");
+const btnFilters     = document.getElementById("btn-filters");
+const btnAddFilter   = document.getElementById("btn-add-filter");
+const btnSync        = document.getElementById("btn-sync");
+const toggleWatch    = document.getElementById("toggle-watch");
+const intervalSel    = document.getElementById("interval-sel");
+const logEl          = document.getElementById("log");
+const btnClearLog    = document.getElementById("btn-clear-log");
 
 // ---------------------------------------------------------------------------
 // Logging & status
@@ -87,13 +96,96 @@ function loadMappings() {
     const raw = localStorage.getItem(STORAGE_KEY);
     mappings = raw ? JSON.parse(raw) : [];
     mappings.forEach((m) => {
-      if (m.lastSyncTime === undefined) m.lastSyncTime = 0;
       if (m.enabled === undefined) m.enabled = true;
     });
   } catch (e) {
     mappings = [];
     log(`Failed to load saved mappings: ${e.message}`, "warn");
   }
+}
+
+function saveFilters() {
+  try {
+    localStorage.setItem(FILTER_KEY, JSON.stringify(ignorePatterns));
+  } catch (e) {
+    log(`Failed to save filters: ${e.message}`, "error");
+  }
+}
+
+function loadFilters() {
+  try {
+    const raw = localStorage.getItem(FILTER_KEY);
+    ignorePatterns = raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    ignorePatterns = [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Filter panel rendering
+// ---------------------------------------------------------------------------
+
+function renderFilterList() {
+  filterList.innerHTML = "";
+  if (ignorePatterns.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "filter-empty";
+    empty.textContent = "No patterns — all files and folders will be imported.";
+    filterList.appendChild(empty);
+    return;
+  }
+  ignorePatterns.forEach((pattern, i) => {
+    const row = document.createElement("div");
+    row.className = "filter-row";
+
+    const patternEl = document.createElement("span");
+    patternEl.className = "filter-pattern";
+    patternEl.textContent = pattern;
+
+    let isValid = true;
+    try { new RegExp(pattern); } catch (_) { isValid = false; }
+    if (!isValid) patternEl.classList.add("filter-invalid");
+
+    const btnDel = document.createElement("button");
+    btnDel.type = "button";
+    btnDel.className = "btn-filter-remove";
+    btnDel.textContent = "×";
+    btnDel.title = "Remove pattern";
+    btnDel.addEventListener("click", () => {
+      ignorePatterns.splice(i, 1);
+      saveFilters();
+      renderFilterList();
+    });
+
+    row.appendChild(patternEl);
+    row.appendChild(btnDel);
+    filterList.appendChild(row);
+  });
+}
+
+function addFilterPattern() {
+  const val = filterInput.value.trim();
+  if (!val) return;
+  try { new RegExp(val); } catch (_) {
+    log(`Invalid regex: ${val}`, "error");
+    return;
+  }
+  if (!ignorePatterns.includes(val)) {
+    ignorePatterns.push(val);
+    saveFilters();
+    renderFilterList();
+  }
+  filterInput.value = "";
+}
+
+function toggleFiltersView() {
+  showingFilters = !showingFilters;
+  filtersPanel.classList.toggle("hidden", !showingFilters);
+  tableContainer.classList.toggle("hidden", showingFilters);
+  btnFilters.classList.toggle("active", showingFilters);
+  btnAdd.disabled    = showingFilters;
+  btnRemove.disabled = showingFilters;
+  if (showingFilters) renderFilterList();
 }
 
 // ---------------------------------------------------------------------------
@@ -325,13 +417,13 @@ async function syncMapping(mapping) {
     return;
   }
 
-  const lastSyncEpoch = chkForceSync.checked ? 0 : (mapping.lastSyncTime ?? 0);
+  const lastSyncEpoch = 0;
   const queue = [{ binPath: mapping.binPath, fsPath: mapping.drivePath }];
   let totalImported = 0, totalSkipped = 0, totalFailed = 0, unchangedCount = 0;
 
   while (queue.length > 0) {
     const batch = queue.splice(0, Math.min(BATCH_SIZE, queue.length));
-    const script = `syncFolderBatch(${JSON.stringify(batch)}, ${lastSyncEpoch})`;
+    const script = `syncFolderBatch(${JSON.stringify(batch)}, ${lastSyncEpoch}, ${JSON.stringify(ignorePatterns)})`;
     const raw = await evalScript(script);
     let results;
     try { results = JSON.parse(raw); } catch (_) { results = { error: raw }; }
@@ -342,6 +434,7 @@ async function syncMapping(mapping) {
         log(`  Error in "${result.binPath}": ${result.error}`, "warn");
       } else {
         totalImported += result.imported;
+        (result.importedFiles || []).forEach((p) => log(`  Imported: ${p}`));
         totalSkipped  += result.skipped;
         totalFailed   += result.failed || 0;
         if (!result.changed) { unchangedCount++; }
@@ -350,9 +443,6 @@ async function syncMapping(mapping) {
       }
     }
   }
-
-  mapping.lastSyncTime = Date.now();
-  saveMappings();
 
   const failedNote    = totalFailed    > 0 ? `, ${totalFailed} failed`       : "";
   const unchangedNote = unchangedCount > 0 ? `, ${unchangedCount} unchanged` : "";
@@ -406,6 +496,9 @@ btnExportCSV.addEventListener("click", exportCSV);
 btnImportCSV.addEventListener("click", importCSV);
 btnSync.addEventListener("click", syncAll);
 btnClearLog.addEventListener("click", () => { logEl.innerHTML = ""; });
+btnFilters.addEventListener("click", toggleFiltersView);
+btnAddFilter.addEventListener("click", addFilterPattern);
+filterInput.addEventListener("keydown", (e) => { if (e.key === "Enter") addFilterPattern(); });
 
 chkAll.addEventListener("change", () => {
   tableBody.querySelectorAll("tr").forEach((tr) => {
@@ -428,6 +521,7 @@ intervalSel.addEventListener("change", () => {
 // ---------------------------------------------------------------------------
 
 loadMappings();
+loadFilters();
 renderTable();
 log("Plugin ready.");
 setStatus("Ready");

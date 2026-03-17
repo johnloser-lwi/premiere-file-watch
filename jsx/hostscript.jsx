@@ -27,6 +27,16 @@ function isMediaFile(name) {
   return !!MEDIA_EXTENSIONS[name.slice(dot + 1).toLowerCase()];
 }
 
+function matchesIgnorePattern(name, patterns) {
+  for (var i = 0; i < patterns.length; i++) {
+    if (!patterns[i]) continue;
+    try {
+      if (new RegExp(patterns[i], 'i').test(name)) return true;
+    } catch (e) { /* invalid regex — skip */ }
+  }
+  return false;
+}
+
 function trimStr(s) {
   return s.replace(/^\s+|\s+$/g, "");
 }
@@ -161,16 +171,19 @@ function navigateOrCreateBinPath(binPathStr) {
  * @param {ProjectItem} bin
  * @returns {Object} { filename: 1, ... }
  */
-function getImportedFilenames(bin) {
-  var names = {};
+function getImportedFilePaths(bin) {
+  var paths = {};
   var children = bin.children;
   for (var i = 0; i < children.numItems; i++) {
     var child = children[i];
     if (child.type !== 2 && child.type !== 3) { // not BIN, not ROOT
-      names[child.name] = 1;
+      var mediaPath = child.getMediaPath();
+      if (mediaPath) paths[mediaPath.replace(/\\/g, '/')] = 1;
+      // Fallback: also index by name for clips whose path is unavailable
+      paths[child.name] = 1;
     }
   }
-  return names;
+  return paths;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,8 +196,9 @@ function getImportedFilenames(bin) {
  * @param {number} lastSyncEpoch ms epoch; 0 = force full scan
  * @returns {string} JSON array of per-folder results: { binPath, imported, skipped, failed, warnings, subfolders, changed } | { error }
  */
-function syncFolderBatch(jobs, lastSyncEpoch) {
+function syncFolderBatch(jobs, lastSyncEpoch, ignorePatterns) {
   lastSyncEpoch = +lastSyncEpoch || 0;
+  ignorePatterns = (ignorePatterns && ignorePatterns.length) ? ignorePatterns : [];
   try {
     if (!app.project) return JSON.stringify({ error: "No active Premiere project." });
     var results = [];
@@ -202,7 +216,10 @@ function syncFolderBatch(jobs, lastSyncEpoch) {
       var subfolders = [];
       for (var j = 0; j < allEntries.length; j++) {
         if (allEntries[j] instanceof Folder) {
-          subfolders.push({ binPath: binPath + "/" + allEntries[j].displayName, fsPath: allEntries[j].fsName });
+          var folderName = allEntries[j].displayName;
+          if (!matchesIgnorePattern(folderName, ignorePatterns)) {
+            subfolders.push({ binPath: binPath + "/" + folderName, fsPath: allEntries[j].fsName });
+          }
         }
       }
 
@@ -214,25 +231,27 @@ function syncFolderBatch(jobs, lastSyncEpoch) {
       }
 
       var bin = navigateOrCreateBinPath(binPath);
-      var alreadyImported = getImportedFilenames(bin);
+      var alreadyImported = getImportedFilePaths(bin);
       var toImport = [];
       var skipped = 0;
       for (var i = 0; i < allEntries.length; i++) {
         if (allEntries[i] instanceof File) {
           var displayName = allEntries[i].displayName;
-          if (isMediaFile(displayName)) {
-            if (alreadyImported[displayName]) { skipped++; } else { toImport.push(allEntries[i].fsName); }
+          if (isMediaFile(displayName) && !matchesIgnorePattern(displayName, ignorePatterns)) {
+            var normalizedPath = allEntries[i].fsName.replace(/\\/g, '/');
+            if (alreadyImported[normalizedPath] || alreadyImported[displayName]) { skipped++; } else { toImport.push(allEntries[i].fsName); }
           }
         }
       }
       allEntries = null;
       alreadyImported = null;
 
-      var imported = 0, failed = 0, warnings = [];
+      var imported = 0, failed = 0, warnings = [], importedFiles = [];
       if (toImport.length > 0) {
         try {
           app.project.importFiles(toImport, true, bin, false);
           imported = toImport.length;
+          importedFiles = toImport.slice();
         } catch (e) {
           failed = toImport.length;
           warnings.push("importFiles failed: " + (e.message || String(e)));
@@ -241,7 +260,7 @@ function syncFolderBatch(jobs, lastSyncEpoch) {
       toImport = null;
       bin = null;
 
-      results.push({ binPath: binPath, imported: imported, skipped: skipped, failed: failed, warnings: warnings, subfolders: subfolders, changed: true });
+      results.push({ binPath: binPath, imported: imported, skipped: skipped, failed: failed, warnings: warnings, subfolders: subfolders, changed: true, importedFiles: importedFiles });
     }
     return JSON.stringify(results);
   } catch (e) {
