@@ -215,8 +215,8 @@ function toggleFiltersView() {
 function mappingsToCSV(rows) {
   const escape = (s) => `"${String(s).replace(/"/g, '""')}"`;
   return [
-    "binPath,drivePath",
-    ...rows.map((r) => `${escape(r.binPath)},${escape(r.drivePath)}`)
+    "binPath,drivePath,label",
+    ...rows.map((r) => `${escape(r.binPath)},${escape(r.drivePath)},${r.label ?? 0}`)
   ].join("\r\n");
 }
 
@@ -252,7 +252,7 @@ function parseCSV(text) {
     if (!line) continue;
     const fields = parseCSVLine(line);
     if (fields.length >= 2) {
-      rows.push({ binPath: fields[0], drivePath: fields[1] });
+      rows.push({ binPath: fields[0], drivePath: fields[1], label: fields[2] !== undefined ? parseInt(fields[2], 10) || 0 : 0 });
     }
   }
   return rows;
