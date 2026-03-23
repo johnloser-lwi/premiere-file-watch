@@ -74,7 +74,8 @@ function resolveDrivePath(drivePath) {
     throw new Error("Cannot resolve relative path \"" + drivePath + "\": no active project with a saved path.");
   }
   var base = projectDir.fsName.replace(/\\/g, '/');
-  return new Folder(base + '/' + p).fsName;
+  var cleanP = p.replace(/^\.\//, '');   // './Footage' → 'Footage'
+  return new Folder(base + '/' + cleanP).fsName;
 }
 
 /**
@@ -90,7 +91,9 @@ function browseFolder() {
   if (projectDir) {
     var projectDirPath = projectDir.fsName;
     var folderPath = folder.fsName;
-    if (folderPath.indexOf(projectDirPath) === 0) {
+    var sep = (projectDirPath.indexOf('\\') !== -1) ? '\\' : '/';
+    var prefix = projectDirPath + sep;
+    if (folderPath.indexOf(prefix) === 0) {
       var rel = folderPath.slice(projectDirPath.length).replace(/\\/g, '/');
       if (rel.charAt(0) === '/') rel = rel.slice(1);
       return './' + rel;
