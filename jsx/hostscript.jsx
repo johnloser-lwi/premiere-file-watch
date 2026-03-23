@@ -103,6 +103,26 @@ function browseFolder() {
   return folder.fsName;
 }
 
+/**
+ * Resolves an array of drive paths to absolute paths.
+ * Already-absolute paths are returned unchanged.
+ * Paths that fail to resolve (e.g. no open project) are returned as-is.
+ * @param {string} pathsJson JSON-encoded array of path strings
+ * @returns {string} JSON-encoded array of resolved path strings
+ */
+function resolveAllDrivePaths(pathsJson) {
+  var paths = JSON.parse(pathsJson);
+  var result = [];
+  for (var i = 0; i < paths.length; i++) {
+    try {
+      result.push(resolveDrivePath(paths[i]));
+    } catch (e) {
+      result.push(paths[i]);
+    }
+  }
+  return JSON.stringify(result);
+}
+
 // ---------------------------------------------------------------------------
 // Bin utilities
 // ---------------------------------------------------------------------------

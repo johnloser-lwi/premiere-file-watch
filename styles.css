@@ -258,6 +258,31 @@ input[type="checkbox"] {
   width: 100%;
 }
 
+td.td-drive {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.btn-abs-toggle {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  font-size: 10px;
+  opacity: 0.4;
+  border-color: #444;
+}
+
+.btn-abs-toggle:hover {
+  opacity: 1;
+}
+
+.btn-abs-toggle.active {
+  background: #2d4a6a;
+  border-color: #4a9eff;
+  color: #4a9eff;
+  opacity: 1;
+}
+
 /* Watch controls */
 #watch-controls {
   display: flex;

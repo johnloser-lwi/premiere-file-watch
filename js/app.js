@@ -354,6 +354,7 @@ function renderTable() {
 
     // Drive path (editable — supports relative paths like ./Footage)
     const tdDrive = document.createElement("td");
+    tdDrive.className = "td-drive";
     const inpDrive = document.createElement("input");
     inpDrive.type = "text";
     inpDrive.className = "cell-input inp-drive";
@@ -372,7 +373,38 @@ function renderTable() {
       updateDriveStyle(v);
       saveMappings();
     });
+
+    const btnAbs = document.createElement("button");
+    btnAbs.type = "button";
+    btnAbs.className = "btn-abs-toggle";
+    btnAbs.textContent = "abs";
+    btnAbs.title = "Show resolved absolute path";
+    let rowShowAbs = false;
+    btnAbs.addEventListener("click", async () => {
+      rowShowAbs = !rowShowAbs;
+      btnAbs.classList.toggle("active", rowShowAbs);
+      if (rowShowAbs) {
+        try {
+          const resolved = await evalScript(`resolveDrivePath(${JSON.stringify(mappings[i].drivePath)})`);
+          inpDrive.value = resolved;
+          inpDrive.readOnly = true;
+          inpDrive.style.color = "";
+          btnAbs.title = "Show stored path";
+        } catch (e) {
+          rowShowAbs = false;
+          btnAbs.classList.remove("active");
+          log("Could not resolve path: " + e.message, "warn");
+        }
+      } else {
+        inpDrive.value = mappings[i].drivePath;
+        inpDrive.readOnly = false;
+        updateDriveStyle(mappings[i].drivePath);
+        btnAbs.title = "Show resolved absolute path";
+      }
+    });
+
     tdDrive.appendChild(inpDrive);
+    tdDrive.appendChild(btnAbs);
     tr.appendChild(tdDrive);
 
     // Active toggle
